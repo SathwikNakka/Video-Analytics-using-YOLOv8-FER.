@@ -1,0 +1,140 @@
+import cvzone
+from ultralytics import YOLO
+from fer import FER
+import cv2
+import matplotlib.pyplot as plt
+import numpy as np
+from collections import Counter, defaultdict
+
+# Function to plot and display pie chart for emotions
+def plot_emotions(emotions_dict, person_id):
+    labels = list(emotions_dict.keys())
+    percentages = list(emotions_dict.values())
+    fig, ax = plt.subplots()
+    wedges, texts, autotexts = ax.pie(
+        percentages, autopct='%1.1f%%', startangle=90, colors=plt.cm.Paired(np.linspace(0, 1, len(labels))),
+        textprops=dict(color="w"), pctdistance=0.85
+    )
+    ax.legend(wedges, [f'{label}: {pct:.1f}%' for label, pct in zip(labels, percentages)],
+              title="Emotions", loc="center left", bbox_to_anchor=(1, 0.5), borderaxespad=0.1)
+    for text in texts:
+        text.set_size(10)
+    for autotext in autotexts:
+        autotext.set_size(8)
+    ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+    plt.title(f'Emotions Distribution for Person {person_id}')
+    plt.show()
+
+# Function to plot and display pie chart for movements
+def plot_movements(movements_dict, person_id):
+    labels = list(movements_dict.keys())
+    percentages = list(movements_dict.values())
+    fig, ax = plt.subplots()
+    wedges, texts, autotexts = ax.pie(
+        percentages, autopct='%1.1f%%', startangle=90, colors=plt.cm.Paired(np.linspace(0, 1, len(labels))),
+        textprops=dict(color="w"), pctdistance=0.85
+    )
+    ax.legend(wedges, [f'{label}: {pct:.1f}%' for label, pct in zip(labels, percentages)],
+              title="Movements", loc="center left", bbox_to_anchor=(1, 0.5), borderaxespad=0.1)
+    for text in texts:
+        text.set_size(10)
+    for autotext in autotexts:
+        autotext.set_size(8)
+    ax.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+    plt.title(f'Head Movements Distribution for Person {person_id}')
+    plt.show()
+
+# Path to the video file
+video = r'C:\Users\Microsoft\Downloads\face detection V1.mp4'
+cap = cv2.VideoCapture(video)
+
+facemodel = YOLO('yolov8n.pt')
+# Initialize the facial expression recognizer
+emotion_detector = FER()
+print(facemodel.names)
+human_class_id = 0
+
+# Initialize dictionaries to store emotion and movement counters for each person
+emotion_counters = defaultdict(Counter)
+movement_counters = defaultdict(lambda: Counter({'Straight': 0}))
+
+# Variables to track head movement
+previous_positions = {}
+
+movement_threshold = 5  # Threshold to detect minute movement changes
+vertical_threshold = 10  # Separate threshold for vertical movement
+
+while cap.isOpened():
+    rt, frame = cap.read()
+    if not rt:
+        break
+    frame = cv2.resize(frame, (1000, 700))
+
+    face_results = facemodel.predict(frame, classes=human_class_id, conf=0.40)
+
+    for person_id, box in enumerate(face_results[0].boxes):  # Assign an ID to each detected face
+        x1, y1, x2, y2 = box.xyxy[0]
+        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+        h, w = y2 - y1, x2 - x1
+        cvzone.cornerRect(frame, [x1, y1, w, h], l=9, rt=3, colorR=(0, 0, 139))
+
+        # Initialize the movement label for this face
+        movement_label = ""
+
+        # Detect head movement
+        prev_x1, prev_y1, prev_x2, prev_y2 = previous_positions.get(person_id, (None, None, None, None))
+
+        if prev_x1 is not None:
+            dx, dy = x1 - prev_x1, y1 - prev_y1
+            if abs(dx) <= movement_threshold and abs(dy) <= 2 * (vertical_threshold):
+                movement_label = "Straight"
+            elif abs(dx) > movement_threshold:
+                if dx > 0:
+                    movement_label = "Right"
+                else:
+                    movement_label = "Left"
+            elif abs(dy) > 2 * (vertical_threshold):
+                if dy > 0:
+                    movement_label = "Down"
+                else:
+                    movement_label = "Up"
+            movement_counters[person_id][movement_label] += 1
+
+        previous_positions[person_id] = (x1, y1, x2, y2)
+
+        # Extract face region
+        face_img = frame[y1:y2, x1:x2]
+        cv2.imwrite("frame.png", face_img)
+        # Analyze facial expressions
+        emotions = emotion_detector.detect_emotions(face_img)
+        if emotions:
+            emotion_scores = emotions[0]['emotions']
+            top_expression = max(emotion_scores, key=emotion_scores.get)
+            emotion_label = f"{top_expression}: {emotion_scores[top_expression]:.2f}"
+
+            # Update emotion counter
+            emotion_counters[person_id][top_expression] += 1
+
+        # Print labels on the right side of the face detection box
+        cv2.putText(frame, emotion_label, (x2 + 10, y1 + 20), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 139), 2)
+        cv2.putText(frame, movement_label, (x2 + 10, y1 + 50), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 139), 2)
+
+    cv2.imshow('frame', frame)
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+
+# Plot and display the pie charts for each person
+for person_id in emotion_counters.keys():
+    # Calculate percentages for each emotion
+    total_emotions = sum(emotion_counters[person_id].values())
+    emotion_percentages = {emotion: count / total_emotions * 100 for emotion, count in emotion_counters[person_id].items()}
+
+    # Calculate percentages for each movement
+    total_movements = sum(movement_counters[person_id].values())
+    movement_percentages = {movement: count / total_movements * 100 for movement, count in movement_counters[person_id].items()}
+
+    plot_emotions(emotion_percentages, person_id)
+    plot_movements(movement_percentages, person_id)
